@@ -1,0 +1,239 @@
+import os
+import hashlib
+import random
+import getpass
+from cryptography.fernet import Fernet, InvalidToken
+from datetime import datetime
+import re
+import shutil
+
+# 🚨 Mount Google Drive for Persistent Storage (Google Colab only)
+try:
+    from google.colab import drive
+    drive.mount('/content/drive')
+except ImportError:
+    print("⚠️ Not running in Colab. Using local storage.")
+
+# 📂 File Paths
+base_path = "/content/drive/MyDrive/SecureFileManagement" if 'google.colab' in str(get_ipython()) else "./SecureFileManagement"
+key_path = os.path.join(base_path, "secret.key")
+audit_log_path = os.path.join(base_path, "audit_log.txt")
+backup_log_dir = os.path.join(base_path, "audit_log_backups")
+
+# 🎭 User Credentials and Roles (Hashed Passwords)
+users = {
+    "admin": {"password": hashlib.sha256("admin123".encode()).hexdigest(), "role": "admin"},
+    "Bablu": {"password": hashlib.sha256("1234".encode()).hexdigest(), "role": "user"},
+    "user1": {"password": hashlib.sha256("user123".encode()).hexdigest(), "role": "user"}
+}
+
+# 🚀 Generate Encryption Key
+def generate_key():
+    try:
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
+        if not os.path.exists(key_path):
+            key = Fernet.generate_key()
+            with open(key_path, 'wb') as key_file:
+                key_file.write(key)
+            print("✅ Encryption Key Generated and Saved.")
+        else:
+            print("🔑 Encryption Key Already Exists.")
+    except (OSError, PermissionError) as e:
+        print(f"❌ Error generating key: {e}")
+        exit(1)
+
+# 🔐 Load Encryption Key
+def load_key():
+    try:
+        with open(key_path, 'rb') as key_file:
+            key = key_file.read()
+            return Fernet(key)
+    except (FileNotFoundError, InvalidToken, OSError) as e:
+        print(f"❌ Error loading key: {e}. Regenerating key...")
+        generate_key()
+        return load_key()
+
+# 📂 Backup Audit Log with Timestamp
+def backup_audit_log():
+    try:
+        if not os.path.exists(backup_log_dir):
+            os.makedirs(backup_log_dir)
+        if os.path.exists(audit_log_path):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = os.path.join(backup_log_dir, f"audit_log_{timestamp}.txt")
+            shutil.copy(audit_log_path, backup_path)
+            print("✅ Audit log backed up successfully.")
+    except (OSError, IOError) as e:
+        print(f"❌ Backup failed: {e}")
+
+# 📝 Log Activity
+def log_activity(username, action, filename):
+    try:
+        with open(audit_log_path, "a") as log_file:
+            log_file.write(f"[{datetime.now()}] - User: {username} - Action: {action} - File: {filename}\n")
+        backup_audit_log()
+    except IOError as e:
+        print(f"❌ Logging failed: {e}")
+
+# 🦠 Enhanced Malware Detection
+def check_for_malware(content):
+    content_lower = content.lower()
+    if len(content.split()) > 100:
+        print("⚠️ Buffer Overflow Detected! Content too large.")
+        return True
+    harmless_phrases = [
+        "story about a virus", "learning about malware", "discussing an attack",
+        "history of trojan wars", "study on sql injections"
+    ]
+    if any(phrase in content_lower for phrase in harmless_phrases):
+        return False
+    malware_patterns = [
+        r"drop\s+table", r"select\s+\*\s+from", r"union\s+select",
+        r"exec\s+xp_cmdshell", r"system\(", r"shutdown", r"grant\s+all",
+        r"(virus|trojan|exploit|malware)\b"
+    ]
+    suspicious_count = sum(1 for pattern in malware_patterns if re.search(pattern, content_lower))
+    return suspicious_count >= 2
+
+# 🎭 Authentication System
+def authenticate(username, password):
+    hashed_password = hashlib.sha256(password.encode()).hexdigest()
+    if username in users and users[username]["password"] == hashed_password:
+        return users[username]["role"]
+    return None
+
+# 🔢 Generate OTP
+def generate_otp():
+    return str(random.randint(1000, 9999))
+
+# 🔐 2FA Verification (Original Console Display)
+def verify_otp(correct_otp):
+    print(f"🔢 Your OTP is: {correct_otp}")
+    otp_input = input("Enter the OTP to proceed: ")
+    return otp_input == correct_otp
+
+# 📚 File Operations
+def sanitize_filename(filename):
+    return re.sub(r'[<>:"/\\|?*]|\.\.', '', filename).strip()
+
+def create_file(username, fernet):
+    filename = sanitize_filename(input("Enter filename: "))
+    if not filename:
+        print("❌ Invalid filename.")
+        return
+    content = input("Enter content: ")
+
+    if check_for_malware(content):
+        print("❌ Malware or Buffer Overflow Detected! File content rejected.")
+        log_activity(username, "Malware/Overflow Detected", filename)
+        return
+
+    try:
+        encrypted_content = fernet.encrypt(content.encode())
+        file_path = os.path.join(base_path, filename)
+        with open(file_path, 'wb') as file:
+            file.write(encrypted_content)
+        print(f"🔐 File '{filename}' encrypted and saved successfully.")
+        log_activity(username, "Created & Encrypted", filename)
+    except (IOError, Fernet.InvalidToken) as e:
+        print(f"❌ Error creating file: {e}")
+
+def read_file(username, fernet):
+    filename = sanitize_filename(input("Enter filename to read: "))
+    file_path = os.path.join(base_path, filename)
+
+    try:
+        if os.path.exists(file_path):
+            with open(file_path, 'rb') as file:
+                encrypted_content = file.read()
+            decrypted_content = fernet.decrypt(encrypted_content).decode()
+            print(f"📄 Decrypted Content:\n{decrypted_content}")
+            log_activity(username, "Read File", filename)
+        else:
+            print(f"❌ File '{filename}' not found.")
+            log_activity(username, "File Not Found", filename)
+    except (IOError, Fernet.InvalidToken) as e:
+        print(f"❌ Error reading file: {e}")
+
+def delete_file(username, role):
+    if role != "admin":
+        print("❌ Only Admin can delete files.")
+        return
+
+    filename = sanitize_filename(input("Enter filename to delete: "))
+    file_path = os.path.join(base_path, filename)
+
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"🗑️ File '{filename}' deleted successfully.")
+            log_activity(username, "Deleted File", filename)
+        else:
+            print(f"❌ File '{filename}' not found.")
+            log_activity(username, "File Not Found (Delete)", filename)
+    except OSError as e:
+        print(f"❌ Error deleting file: {e}")
+
+# 📚 View Audit Log (Admin Only)
+def view_audit_log(username, role):
+    if role != "admin":
+        print("❌ Access Denied! Only Admin can view the audit log.")
+        return
+
+    try:
+        if os.path.exists(audit_log_path):
+            with open(audit_log_path, "r") as log_file:
+                print("📜 Audit Log:\n", log_file.read())
+        else:
+            print("⚠️ No audit log found.")
+    except IOError as e:
+        print(f"❌ Error reading audit log: {e}")
+
+# 🎮 Main Menu
+def main():
+    print("🔐 Welcome to Secure File Management System!")
+    generate_key()
+    fernet = load_key()
+
+    username = input("Enter username: ")
+    password = getpass.getpass("Enter password: ")
+
+    role = authenticate(username, password)
+    if not role:
+        print("❌ Invalid username or password. Access Denied!")
+        return
+
+    print("✅ Authentication Successful!")
+    otp = generate_otp()
+    if not verify_otp(otp):
+        print("❌ 2FA Verification Failed!")
+        return
+
+    print("✅ 2FA Verification Successful!")
+
+    while True:
+        print("\n📚 File Operations:")
+        print("1. Create and Encrypt File")
+        print("2. Read and Decrypt File")
+        print("3. Delete File")
+        print("4. View Audit Log")
+        print("5. Exit")
+
+        choice = input("Enter your choice: ")
+        if choice == '1':
+            create_file(username, fernet)
+        elif choice == '2':
+            read_file(username, fernet)
+        elif choice == '3':
+            delete_file(username, role)
+        elif choice == '4':
+            view_audit_log(username, role)
+        elif choice == '5':
+            print("👋 Exiting the system. Goodbye!")
+            break
+        else:
+            print("❌ Invalid choice. Please try again.")
+
+if _name_ == "_main_":
+    main()
